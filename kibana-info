@@ -1,0 +1,94 @@
+-- Script Name: kibana-info.nse
+-- Purpose: Scans for Apache ZooKeeper services, gathers version information,
+-- server state, and attempts to list znodes if accessible.
+-- Author: thepacketbender
+-- License: Same as Nmap -- See https://nmap.org/book/man-legal.html
+
+-- Import necessary libraries
+local nmap = require "nmap"
+local shortport = require "shortport"
+local stdnse = require "stdnse"
+
+description = [[
+Scans for Kibana instances, retrieves version information,
+checks for basic authentication, and looks for misconfigurations.
+]]
+
+categories = {"safe", "discovery", "version", "vuln"}
+
+dependencies = {"http", "shortport"}
+
+author = "thepacketbender"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+-- Port rule to check if Kibana is running on the default port
+portrule = shortport.port_or_service(5601, "kibana", "tcp")
+
+-- Action function where the main logic goes
+action = function(host, port)
+  local http = require "http"
+  local stdnse = require "stdnse"
+
+    -- Check for Kibana's presence by attempting to load the main page
+  res, err = http.get(host, port, "/")
+  if not res then
+    stdnse.print_debug(1, "Failed to connect to Kibana: %s", err)
+    return nil
+  end
+  local output = {}
+
+  -- Function to make HTTP GET requests and handle responses
+  local function http_get(path)
+    local response, err = http.get(host, port, path)
+    if not response then
+      stdnse.print_debug(1, "Failed to connect to Kibana at %s: %s", path, err)
+      return nil
+    end
+    return response
+  end
+
+  -- Check for Kibana's presence by attempting to load the main page
+  local res = http_get("/")
+  if not res then
+    return nil
+  end
+
+  -- Version Detection from headers or content
+  if res.body then
+    local version = string.match(res.body, "Kibana v?([%d%.]+)")
+    if version then
+      table.insert(output, "Kibana Version: " .. version)
+    else
+      table.insert(output, "Kibana Version: Not found in the body")
+    end
+  else
+    table.insert(output, "Kibana Version: No response body")
+  end
+
+  -- Check for authentication
+  if res.status == 200 then
+    table.insert(output, "Authentication: Not enforced or not visible")
+  elseif res.status == 401 then
+    table.insert(output, "Authentication: Required")
+  else
+    table.insert(output, "Authentication: Status code " .. res.status)
+  end
+
+  -- Check for known endpoints to gather more information
+  local endpoints = {
+    "/api/status",
+    "/app/kibana"
+  }
+
+  for _, endpoint in ipairs(endpoints) do
+    local endpoint_res = http_get(endpoint)
+    if endpoint_res and endpoint_res.status == 200 then
+      table.insert(output, endpoint .. ": Accessible")
+    else
+      table.insert(output, endpoint .. ": Not accessible or requires auth")
+    end
+  end
+
+  -- Return formatted output
+  return stdnse.format_output(true, output)
+end
